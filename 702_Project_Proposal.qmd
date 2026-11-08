@@ -1,0 +1,365 @@
+---
+title: "IDS 702 Project Proposal"
+author: "Hongda Li, Xuechun Zhao, Tsaone Tapologo"
+format:
+  pdf:
+    pdf-engine: pdflatex
+    fontsize: 10pt
+    geometry: margin=0.8in
+    keep-tex: true
+editor: visual
+execute:
+  echo: false
+  message: false
+  warning: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+library(haven)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+
+options(dplyr.summarise.inform = FALSE)
+knitr::opts_chunk$set(fig.width=6.5, fig.height=2.5, fig.align='center')
+theme_set(theme_minimal(base_size=10))
+
+cps_raw <- read_dta("morg24.dta")
+gss_raw <- read_dta("2024/GSS2024.dta")
+# Preserve raw data; all transformations below create separate analysis objects.
+
+cps <- cps_raw |>
+  mutate(across(everything(), ~ if(inherits(.x, 'haven_labelled')) as.numeric(zap_missing(.x))
+                else .x)) |>
+  filter(age >= 25, age <= 64, lfsr94 %in% c(1,2), class94 %in% 1:5,
+         earnwke > 0, uhourse > 0, uhourse <= 99, earnwt > 0,
+         grade92 %in% 31:46, sex %in% 1:2) |>
+  mutate(education=factor(case_when(grade92<=38 ~ 'Less than HS',grade92==39 ~ 'High school',
+    grade92<=42 ~ 'Some college/AA',grade92==43 ~ "Bachelor's",TRUE ~ 'Graduate'),
+    levels=c('Less than HS','High school','Some college/AA',"Bachelor's",'Graduate')),
+    sex_group=factor(sex,levels=1:2,labels=c('Male','Female')),
+    log_pay=log(earnwke), w=earnwt/10000)
+
+gss <- gss_raw |>
+  mutate(across(everything(), ~ if(inherits(.x, 'haven_labelled')) as.numeric(zap_missing(.x))
+                else .x)) |>
+  mutate(income_group=factor(case_when(income16 %in% 1:14 ~ 'Under $25k',
+    income16 %in% 15:18 ~ '$25k-49,999', income16 %in% 19:20 ~ '$50k-74,999',
+    income16 %in% 21:22 ~ '$75k-109,999', income16 %in% 23:26 ~ '$110k+',TRUE ~ NA_character_),
+    levels=c('Under $25k','$25k-49,999','$50k-74,999','$75k-109,999','$110k+')),
+    happiness=factor(happy,levels=1:3,labels=c('Very happy','Pretty happy','Not too happy')),
+    very_happy=case_when(happy==1 ~ 1, happy %in% 2:3 ~ 0, TRUE ~ NA_real_),
+    sex_group=factor(sex,levels=1:2,labels=c('Male','Female')), w=wtssnrps_as)
+
+gss_model <- gss |>
+  filter(complete.cases(very_happy,income_group,age,educ,sex_group,marital,wrkstat,w),w>0)
+fmt <- function(x) format(round(x),big.mark=',',trim=TRUE)
+wmean <- function(x,w) weighted.mean(x,w,na.rm=TRUE)
+```
+
+## Project Proposal/Statistical Analysis Plan
+
+Link to your team's Github Repo: <https://github.com/Mark7569/IDS-702_Project.git>
+
+### Dataset Option 1
+
+------------------------------------------------------------------------
+
+**Project Title:** Education and Weekly Earnings: Does the Association Differ by Sex among U.S. Wage and Salary Workers?
+
+**Data citation:** National Bureau of Economic Research. (n.d.). *Current Population Survey: Merged Outgoing Rotation Group earnings data, 2024* \[Data set; underlying survey collected by the U.S. Census Bureau for the Bureau of Labor Statistics\]. <https://www.nber.org/research/data/current-population-survey-cps-merged-outgoing-rotation-group-earnings-data>
+
+**Original data collection date (when was the dataset published?):** Monthly interviews during January-December 2024. The NBER landing page was last updated in May 2025; this is not a verified initial publication date for the specific file.
+
+**Data pull date:** November 3, 2026 (local download date; confirm with the team before submission).
+
+------------------------------------------------------------------------
+
+#### 1 Research Question
+
+Among U.S. wage and salary workers aged 25-64 in 2024, how does usual weekly earnings differ across educational attainment groups after adjusting for age and usual weekly work hours, and does this association differ between respondents recorded as female and male?
+
+This is an inferential question about adjusted associations in the target population. The observational design does not identify causal returns to education or establish discrimination. Weekly earnings measure pay and labor supply together; this study does not interpret weekly earnings as an hourly wage.
+
+#### 2 Study Population
+
+The observational unit is an adult's outgoing-rotation CPS interview. The CPS is a probability household survey conducted by the Census Bureau for BLS, with a rotating sample interviewed for four months, absent for eight months, and interviewed for four more months. Earnings questions are asked in months four and eight. We use the 2024 annual MORG extract, which combines the outgoing interviews across the 12 months. A respondent normally contributes at most one outgoing interview within a calendar year, although different respondents can share a household.
+
+The raw file contains **`r fmt(nrow(cps_raw))` observations and `r ncol(cps_raw)` variables**. It exceeds 300 observations and 10 variables and includes numeric and categorical variables. Our proposed population is employed, non-self-employed wage and salary workers aged 25-64 in the civilian noninstitutional U.S. population. We restrict the working analysis to employed respondents with class-of-worker codes 1-5, positive earnings and valid hours, education, sex and earnings weights. Self-employed workers, unpaid workers and ineligible or incomplete records are excluded. This yields **`r fmt(nrow(cps))` preliminary eligible records**. Counts and exclusions will be documented again before modeling. The final retained file will preserve at least 10 substantive variables, including age, sex, education, earnings, hours, worker class, employment status, race, marital status and industry.
+
+#### 3 Outcomes, Exposures, and Additional Variables of Interest
+
+3.1 Primary Outcome(s)
+
+| Variable Name | Description | Coding specification |
+|------------------------|------------------------|------------------------|
+| `earnwke` | Usual weekly earnings | Positive U.S. dollars per week; model natural logarithm. Missing/nonpositive values excluded. |
+
+3.2 Primary Independent Variable(s)
+
+| Variable Name | Description | Coding specification |
+|------------------------|------------------------|------------------------|
+| `grade92` | Highest education completed | 31-38: less than HS; 39: HS; 40-42: some college/associate degree; 43: bachelor's; 44-46: graduate. HS is model reference. |
+| `sex` | Recorded sex; effect modifier | 1=male (reference), 2=female. This binary measure does not capture the full range of gender identities. |
+
+3.3 Additional Variables of Interest (including potential confounders)
+
+| Variable Name | Description | Coding specification |
+|------------------------|------------------------|------------------------|
+| `age` | Age in years | Restrict to 25-64; center at 45; include linear and squared terms. |
+| `uhourse` | Usual weekly hours | Retain 1-99 hours. Special negative values, including varying-hours responses, are excluded rather than treated as hours. |
+| `class94` | Class of worker | Eligibility: 1=federal, 2=state, 3=local government, 4=private for-profit, 5=private nonprofit. |
+| `lfsr94` | Labor force status | Eligibility: 1=employed at work, 2=employed absent. |
+| `earnwt` | Earnings survey weight | Positive values divided by 10,000; used for earnings descriptives and estimation. |
+| `race`, `marital`, `ind17` | Race, marital status, industry | Retained for sample description and potential sensitivity adjustment; exact category labels will follow the annual documentation. |
+
+#### 4 Statistical Analysis Plan
+
+4.1 Exploratory Data Analysis
+
+We will inspect the selected columns and report the sample flow, missingness and exclusion counts. We will summarize weekly earnings using the mean, SD, median and quartiles, and plot its distribution on a logarithmic horizontal axis. We will compare education groups using earnings-weighted mean log weekly earnings, exponentiated to geometric means, separately by sex. These are unadjusted descriptive comparisons, not estimated causal effects or model results. We will also examine cell counts, extreme earnings, top-coding and imputation flags before modeling.
+
+4.2 Statistical Model (write in mathematical notation and define each term)
+
+We propose an earnings-weighted multiple linear regression:
+
+$$
+\log(W_i)=\beta_0+\sum_{k\ne HS}\beta_k E_{ik}+\gamma F_i
++\sum_{k\ne HS}\delta_k(E_{ik}F_i)
++\theta_1 A_i+\theta_2 A_i^2+\lambda H_i+\varepsilon_i.
+$$
+
+Here $W_i$ is weekly earnings; $E_{ik}$ indicates education group $k$, with high school as reference; $F_i=1$ denotes female and 0 male; $A_i$ is age minus 45; and $H_i$ is usual weekly hours. The intercept describes the mathematical reference point, not a representative worker. Education coefficients describe log earnings differences for males; interaction coefficients describe how these differences change for females. A joint test of all $\delta_k=0$ addresses effect modification. We will report exponentiated contrasts, confidence intervals and adjusted predictions at meaningful covariate values.
+
+4.2 Rationale for the statistical model
+
+Earnings are positive and often right-skewed. A log outcome allows multiplicative comparisons and may improve residual behavior. Education is modeled categorically to avoid imposing equal wage increments across qualifications. Interactions directly address the research question. Age squared accommodates nonlinear age patterns. Adjustment for work hours makes the weekly earnings comparison more interpretable but does not convert the outcome into hourly earnings. Occupation and industry are omitted from the primary adjustment set because they may lie on pathways linking education to earnings; adding them changes the estimand and will be treated as sensitivity analysis.
+
+4.3 Model Assumptions
+
+We assume an adequately specified conditional mean for log earnings, no perfect collinearity, sufficient overlap across sex-by-education cells, and finite residual variance. Respondents within households or sampling clusters may be dependent. Survey weights address unequal representation, not unmeasured confounding. Complete-case analysis may be biased if exclusions are informative. Residual normality is useful for conventional small-sample inference, but large-sample robust inference does not require a normally distributed outcome.
+
+4.4 Model Assessment
+
+We will examine residual-versus-fitted and Q-Q plots, residual patterns by hours and age, leverage and Cook's distance, and education-by-sex cell sizes. We will evaluate nonlinear hours specifications if supported by diagnostics. Earnings weights will be used, with survey-design variance estimation where released design identifiers support it; otherwise, household-cluster robust variance will be used when valid identifiers can be constructed, with remaining design limitations disclosed. We will not assume default weighted-regression standard errors are adequate. We will assess sensitivity to top-coded and imputed earnings and report how exclusions affect results. No models are fitted for this proposal.
+
+\newpage
+
+#### Exploratory Data Analysis
+
+```{r}
+#| results: asis
+cps_snapshot <- data.frame(Measure=c('Raw observations','Raw variables','Eligible observations','Excluded records'),
+ Value=c(fmt(nrow(cps_raw)),ncol(cps_raw),fmt(nrow(cps)),fmt(nrow(cps_raw)-nrow(cps))))
+kable(cps_snapshot,caption='CPS sample snapshot (unweighted record counts).',booktabs=TRUE)
+kable(data.frame(Variable=c('Weekly earnings','Age','Sex','Education','Weekly hours','Earnings weight'),
+ Storage=c('Numeric','Numeric','Numeric category','Numeric category','Numeric','Numeric'),
+ Example=cps |> slice(1) |> transmute(a=earnwke,b=age,c=sex,d=grade92,e=uhourse,f=round(w,2)) |> unlist() |> as.character()),
+ caption='Selected-column snapshot: one eligible record, similar to a compact glimpse.',booktabs=TRUE)
+```
+
+The preliminary eligible sample contains `r fmt(sum(cps$sex==1))` male and `r fmt(sum(cps$sex==2))` female respondents. Relative to the raw file, `r fmt(sum(is.na(cps_raw$earnwke)))` records lack weekly earnings. Exclusions overlap, so this missing count is not an additive sample-flow component. The table below gives unweighted sample quantiles and earnings-weighted means; weights describe the eligible domain rather than all adults.
+
+```{r}
+kable(data.frame(Statistic=c('Mean (sample)','SD (sample)','25th percentile (sample)','Median (sample)',
+ '75th percentile (sample)','Mean (earnings-weighted)'),
+ Dollars=round(c(mean(cps$earnwke),sd(cps$earnwke),quantile(cps$earnwke,c(.25,.5,.75)),wmean(cps$earnwke,cps$w)),2)),
+ caption='Weekly earnings in U.S. dollars, eligible workers.',booktabs=TRUE)
+```
+
+```{r}
+#| fig-cap: "Weekly earnings among eligible workers. Bin heights sum earnings weights; the horizontal axis is logarithmic."
+ggplot(cps,aes(earnwke,weight=w))+geom_histogram(bins=45,fill='#286C8E',color='white')+
+ scale_x_log10(labels=scales::label_dollar())+
+ labs(x='Usual weekly earnings (USD; log scale)',y='Sum of earnings weights')
+```
+
+\newpage
+
+```{r}
+#| fig-cap: "Unadjusted geometric mean weekly earnings by education and recorded sex. No regression models or inferential intervals are used."
+cps_groups <- cps |> group_by(education,sex_group) |>
+ summarise(n=n(),geometric_mean=exp(wmean(log_pay,w)),.groups='drop')
+ggplot(cps_groups,aes(education,geometric_mean,color=sex_group,group=sex_group))+
+ geom_line()+geom_point(size=2)+scale_y_continuous(labels=scales::label_dollar())+
+ labs(x='Education',y='Weighted geometric mean weekly earnings (USD)',color='Recorded sex')+
+ theme(axis.text.x=element_text(angle=15,hjust=1))
+```
+
+```{r}
+knitr::kable(
+  cps_groups |>
+    dplyr::mutate(
+      geometric_mean = round(geometric_mean, 2)
+    ) |>
+    dplyr::rename(
+      Education = education,
+      Sex = sex_group,
+      `Sample n` = n,
+      `Geometric mean (USD)` = geometric_mean
+    ),
+  caption = "Education-by-sex cell counts and weighted geometric means.",
+  booktabs = TRUE
+)
+```
+
+The education gradient and differences between the two series motivate the proposed interaction analysis. These comparisons are unadjusted and may reflect age, hours, job sorting and other differences. Formal conclusions about adjusted associations will wait until the analysis stage. No extreme earnings have been removed solely because of their size.
+
+\newpage
+
+### Dataset Option 2
+
+------------------------------------------------------------------------
+
+**Project Title:** Family Income and the Probability of Being Very Happy: Differences by Sex in the 2024 General Social Survey.
+
+**Data citation:** NORC at the University of Chicago. (2026). *General Social Survey, 2024 cross-section, Release 3a* \[Data set\]. <https://gss.norc.org/get-the-data.html>. Documentation: *2024 GSS Cross-section Documentation and Public Use File Codebook (Release 3a)*, especially sampling, weighting and variable coding sections.
+
+**Original data collection date (when was the dataset published?):** Baseline fieldwork April 3-December 2, 2024; AmeriSpeak oversample September 6-November 22, 2024. Initial 2024 cross-section release was announced May 22, 2025; the supplied Release 3a documentation is dated July 2026.
+
+**Data pull date:** November 3, 2026 (local download date; confirm with the team before submission).
+
+------------------------------------------------------------------------
+
+#### 1 Research Question
+
+Among U.S. adults represented by the 2024 GSS, how does the probability of reporting being very happy differ across family income groups after adjusting for age, education, marital status and employment status, and does this association differ between respondents recorded as female and male?
+
+We define the binary outcome before modeling: very happy versus pretty happy/not too happy. This focuses the question on high subjective well-being, with an ordinary binary logistic model suitable for the course. It does sacrifice distinctions between the other two categories; their separate distributions will remain visible in EDA. Associations cannot establish that increasing income causes happiness, since health, household circumstances, selection and reverse direction may contribute.
+
+#### 2 Study Population
+
+Each row represents one adult respondent. The GSS baseline targets adults aged 18 or older living in noninstitutional housing in the United States, using a multistage probability design and within-household respondent selection. Interviews used face-to-face, web and supplementary telephone/multimode collection. The single-year file combines 3,309 baseline respondents with 677 AmeriSpeak oversample respondents; the oversample targeted Black, Hispanic and Asian or Pacific Islander adults and used web interviews. Its panel eligibility was assessed at recruitment, which differs from baseline eligibility timing.
+
+The supplied file has **`r fmt(nrow(gss_raw))` respondents and `r ncol(gss_raw)` variables**, including numeric and categorical variables. We use the main cross-section responses, not the smaller follow-on happiness item. The official combined-sample weight, **`wtssnrps_as`**, is required when baseline and AmeriSpeak observations are combined (Codebook, weighting section). The preliminary complete-case sample has **`r fmt(nrow(gss_model))` respondents**. We retain at least 10 substantive columns: happiness, income, age, education years, degree, sex, marital status, employment status, financial satisfaction and region; these need not all enter the model.
+
+#### 3 Outcomes, Exposures, and Additional Variables of Interest
+
+3.1 Primary Outcome(s)
+
+| Variable Name | Description | Coding specification |
+|------------------------|------------------------|------------------------|
+| `happy` | General happiness | Original: 1=very happy, 2=pretty happy, 3=not too happy. Derived outcome: 1 if original=1; 0 if original=2 or 3. Special missing responses remain missing. |
+
+3.2 Primary Independent Variable(s)
+
+| Variable Name | Description | Coding specification |
+|------------------------|------------------------|------------------------|
+| `income16` | Total family income, reported in 26 ordered brackets | Regroup 1-14: under \$25,000 (reference); 15-18: \$25,000-49,999; 19-20: \$50,000-74,999; 21-22: \$75,000-109,999; 23-26: \$110,000+. Codes are not dollar amounts. |
+| `sex` | Recorded sex; effect modifier | 1=male (reference), 2=female. Do not infer gender identity from this item. |
+
+3.3 Additional Variables of Interest (including potential confounders)
+
+| Variable Name | Description | Coding specification |
+|------------------------|------------------------|------------------------|
+| `age` | Age in years | Center at 45; include linear and squared terms. Public-file disclosure protections limit age detail at the upper end. |
+| `educ` | Completed years of education | Numeric years, modeled continuously initially. |
+| `marital` | Marital status | 1=married (reference), 2=widowed, 3=divorced, 4=separated, 5=never married. |
+| `wrkstat` | Employment status | 1=full-time (reference), 2=part-time, 3=temporarily absent, 4=unemployed, 5=retired, 6=school, 7=keeping house, 8=other. |
+| `degree` | Highest degree | 0=less than HS; 1=HS; 2=associate; 3=bachelor's; 4=graduate. Descriptive variable; not simultaneously adjusted with education years in the primary model. |
+| `satfin` | Financial satisfaction | 1=satisfied, 2=more or less satisfied, 3=not at all satisfied; descriptive only because it overlaps conceptually with the outcome. |
+| `wtssnrps_as` | Combined-sample weight | Positive post-stratification/nonresponse-adjusted weight including AmeriSpeak oversample. |
+
+#### 4 Statistical Analysis Plan
+
+4.1 Exploratory Data Analysis
+
+We will inspect selected columns, missingness and raw and complete-case counts. We will show all three happiness categories with unweighted counts and combined-weight percentages, and plot their weighted distribution. We will then plot the weighted proportion very happy across income categories, separately by sex, and report cell sizes. We will retain missing answers as missing rather than recode them as unhappy or low income. The 26 income brackets will be grouped using prespecified boundaries to avoid sparse interaction cells and avoid assuming equal spacing between brackets.
+
+4.2 Statistical Model (write in mathematical notation and define each term)
+
+Let $Y_i=1$ indicate very happy and $p_i=P(Y_i=1\mid X_i)$. We propose a survey-weighted binary logistic model:
+
+$$
+\begin{aligned}
+\log\left(\frac{p_i}{1-p_i}\right)
+&=\alpha+\sum_{k=2}^{5}\beta_k I_{ik}+\gamma F_i
++\sum_{k=2}^{5}\delta_k I_{ik}F_i\\
+&\quad+\theta_1 A_i+\theta_2 A_i^2+\eta Q_i
++\boldsymbol{\mu}^{T}\mathbf{M}_i+\boldsymbol{\nu}^{T}\mathbf{L}_i.
+\end{aligned}
+$$
+
+$I_{ik}$ indicates income group $k$, with under \$25,000 as reference; $F_i$ is female; $A_i$ is age minus 45; $Q_i$ is education years; $\mathbf{M}_i$ and $\mathbf{L}_i$ are marital and employment indicator vectors with married and full-time references. We will test all income-by-sex interactions jointly. Coefficients will be exponentiated to odds ratios, and adjusted probability contrasts will be reported because odds ratios are not risk ratios. Differences on the probability scale will be computed directly rather than inferred solely from logit interaction coefficients.
+
+4.2 Rationale for the statistical model
+
+The prespecified outcome is binary, so logistic regression models probabilities in \[0,1\]. Categorical income avoids treating bracket codes as equal monetary increments. Interactions allow the income association to differ by sex. Survey weights address the unequal representation created by the baseline design and oversample. The model estimates conditional associations rather than an income intervention effect.
+
+4.3 Model Assumptions
+
+The logit mean structure should adequately represent age, education and group relationships. There must be sufficient observations, events and nonevents in relevant cells, no complete separation and no perfect collinearity. Survey-design inference requires appropriate treatment of weights, strata and clusters; independence of all rows is not assumed. Complete-case analysis requires assumptions about missingness and may not fully preserve representativeness. The binary formulation does not require the proportional-odds assumption of an ordinal logistic model.
+
+4.4 Model Assessment
+
+We will inspect income-by-sex event counts, separation, influential observations and nonlinear age/education patterns. We will assess weighted calibration and Brier score, with survey-aware resampling if predictive performance is evaluated; discrimination is secondary because this is an explanatory study. We will examine sensitivity to income grouping and to excluding respondents with missing covariates. Variance estimation will follow the combined-sample design guidance; we will confirm whether released stratum/cluster identifiers support the combined baseline-plus-panel design rather than automatically treating baseline design codes as valid for both frames. Any remaining design approximation will be disclosed. We will not use ordinary unweighted logistic standard errors as population inference. No models are fitted for this proposal.
+
+\newpage
+
+#### Exploratory Data Analysis
+
+```{r}
+kable(data.frame(Measure=c('Raw respondents','Raw variables','Complete-case respondents','Excluded from model domain'),
+ Value=c(fmt(nrow(gss_raw)),ncol(gss_raw),fmt(nrow(gss_model)),fmt(nrow(gss_raw)-nrow(gss_model)))),
+ caption='GSS sample snapshot (unweighted counts).',booktabs=TRUE)
+kable(data.frame(Variable=c('Happiness','Family income bracket','Age','Education years','Recorded sex','Combined weight'),
+ Storage=c('Numeric category','Numeric category','Numeric','Numeric','Numeric category','Numeric'),
+ Example=gss |> filter(!is.na(happy),!is.na(income16)) |> slice(1) |>
+ transmute(a=happy,b=income16,c=age,d=educ,e=sex,f=round(w,3)) |> unlist() |> as.character()),
+ caption='Selected-column snapshot: one respondent, similar to a compact glimpse.',booktabs=TRUE)
+gss_happy <- gss |> filter(!is.na(happiness),!is.na(w),w>0) |> group_by(happiness) |>
+ summarise(n=n(),weighted_total=sum(w),.groups='drop') |>
+ mutate(percent=100*weighted_total/sum(weighted_total))
+kable(gss_happy |> transmute(Happiness=happiness,`Sample n`=n,`Weighted percent`=round(percent,1)),
+ caption='All nonmissing happiness responses; combined-sample weights.',booktabs=TRUE)
+```
+
+```{r}
+#| fig-cap: "Weighted happiness distribution, using all respondents with valid happiness and combined weight."
+ggplot(gss_happy,aes(happiness,percent))+geom_col(fill='#267A70',width=.65)+
+ labs(x='Self-reported happiness',y='Weighted percent')
+```
+
+Of the raw respondents, `r sum(is.na(gss$income16))` lack family income, `r sum(is.na(gss$happy))` lack happiness and `r sum(is.na(gss$age))` lack age. Counts overlap. The model domain has `r sum(gss_model$very_happy==1)` very-happy and `r sum(gss_model$very_happy==0)` other respondents. Weighted outcome percentages above use a larger descriptive domain than the complete-case comparison below.
+
+\newpage
+
+```{r}
+#| fig-cap: "Unadjusted weighted percentage very happy by income group and recorded sex, in the complete-case model domain."
+gss_groups <- gss_model |> group_by(income_group,sex_group) |>
+ summarise(n=n(),events=sum(very_happy),percent=100*wmean(very_happy,w),.groups='drop')
+ggplot(gss_groups,aes(income_group,percent,color=sex_group,group=sex_group))+
+ geom_line()+geom_point(size=2)+labs(x='Annual family income (USD)',y='Weighted percent very happy',color='Recorded sex')+
+ theme(axis.text.x=element_text(angle=15,hjust=1))
+```
+
+```{r}
+kable(gss_groups |> transmute(Income=income_group,Sex=sex_group,`Sample n`=n,
+ `Very happy n`=events,`Weighted percent`=round(percent,1)),
+ caption='Income-by-sex sample sizes and happiness summaries.',booktabs=TRUE)
+```
+
+Income categories contain families of different sizes and compositions, and the present measure is not equivalized disposable income. The descriptive patterns motivate adjusted comparisons but do not establish a causal income effect. We will assess item nonresponse, survey-mode measurement differences and the effect of combining the baseline sample with the oversample before making population claims.
+
+\newpage
+
+## Team Charter
+
+The team members are **Hongda Li, Xuechun Zhao, and Tsaone Tapologo**. The following agreements are pending team discussion and must be finalized before submission; no meeting or communication commitments have been assumed.
+
+1.  **When will you meet as a team? In person or virtually?**
+
+    We will meet at least once a week for approximately one hour, with additional meetings before major deadlines as needed.
+
+2.  **What is your policy on missing meetings?**
+
+    Members should notify the group at least 24 hours in advance if they cannot attend a scheduled meeting, except in emergencies. The absent member will review the meeting notes, communicate any questions, and confirm their assigned tasks within 24 hours after the meeting. If a member anticipates missing a task deadline, they should inform the group as early as possible so we can adjust the workload together.
+
+3.  **How will you communicate and what is the response-time policy?**
+
+    We will use a group chat for routine communication and GitHub to share code and track changes. Members should respond to messages requiring a reply within 24 hours on weekdays and 48 hours on weekends. Urgent messages near a deadline should be clearly marked, and we will agree in advance on availability during those periods. We do not expect immediate replies late at night.
+
+Every member will contribute to both dataset options and review the research questions, EDA and final proposal. Specific responsibilities and deadlines remain to be agreed by the team.
